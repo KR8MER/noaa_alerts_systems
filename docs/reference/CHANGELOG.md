@@ -7,6 +7,17 @@ All notable changes to this project are documented in this file. The format is b
 
 - Nothing yet. Document changes here as they land; the next release cut moves them into a version heading.
 
+## [3.4.0] - 2026-09-12 - SDR Diagnostics: peak deviation and pilot/RDS injection level (kHz)
+
+Third and final planned step (after Signal Quality history in 3.3.0 and the button-audit fixes in 3.3.1) toward FM-broadcast-analyzer-style monitoring on the existing SDR stack, following a PIRA P275 hardware analyzer screenshot the user shared as reference. The one genuinely new piece of DSP in the set -- unlike stereo pilot strength / click rate, which only needed wiring an already-computed value through, these three are new measurements.
+
+- **Added**: `peak_deviation_hz`, `pilot_injection_hz`, `rds_injection_hz` on `DemodulatorStatus` (`app_core/radio/demod/types.py`), computed in `FMDemodulator.demodulate()` (`app_core/radio/demod/fm.py`). All three are the inverse of the existing `_audio_gain` scale factor (raw discriminator output in radians/sample times `sample_rate / (2*pi)` is real Hz) -- not new calibration, just exposing a conversion the code already implicitly does for audio normalization. Peak deviation and pilot injection reuse values (`multiplex`, `pilot_rms`) already computed every chunk regardless; RDS injection needed one new FIR bandpass filter (55.6-58.4 kHz), built only when RBDS decoding is enabled so receivers that don't use RDS pay nothing extra.
+- Threaded through the same pattern already proven for `click_rate` (PR #2621): `app_core/audio/redis_sdr_adapter.py`'s metadata dict, `webapp/admin/audio_ingest/routes_signal_quality.py`'s existing history endpoint (no new route), three more Chart.js charts in the already-shipped Signal Quality modal.
+- Applied the axis-headroom lesson from 3.3.1: the two new percentage-like metrics use plain `beginAtZero: true` with no `max`/`suggestedMax` at all, rather than fighting Chart.js's auto-scale heuristics again -- real audio content makes these genuinely vary (confirmed live: peak deviation swung 80-92 kHz across a few seconds), so there's no constant-value-at-a-hard-ceiling failure mode to guard against here the way there was for a rock-solid 100% pilot lock.
+- `tests/test_fm_deviation_injection_metrics.py`: 6 new tests synthesizing FM signals at *known* deviations (a pure tone at exactly 50 kHz peak deviation, a pilot at exactly 6.75 kHz peak, a 57 kHz tone at exactly 3.5 kHz peak) and asserting the computed values land close to the expected Hz/RMS values -- this is the one part of the feature where "the field threads through end to end" isn't sufficient coverage on its own, since the math itself is new.
+- Live-verified on `sdr-wbks` (a real over-the-air FM station, not a synthetic signal): peak deviation ~80-92 kHz, pilot injection ~4.2-4.3 kHz, RDS injection ~3.3-3.4 kHz -- all in plausible real-world ranges (FCC full-scale reference is +/-75 kHz; typical healthy pilot/RDS injection is ~2-7.5 kHz depending on station configuration).
+- `tests/test_signal_quality_history_api.py`: extended with a test covering the three new fields in the history response.
+
 ## [3.3.1] - 2026-09-12 - SDR Diagnostics: fix Snapshot Waterfall crash and two invisible-line chart bugs
 
 Found by systematically clicking through every control on the SDR Diagnostics page (logged in as a real admin) rather than trusting that "no console error" meant "actually works" -- three real, independent bugs surfaced this way.

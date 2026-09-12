@@ -19,13 +19,14 @@ Repository: https://github.com/KR8MER/eas-station
 
 from __future__ import annotations
 
-"""Signal-quality history endpoint (stereo pilot strength, click rate).
+"""Signal-quality history endpoint (stereo pilot strength, click rate,
+peak deviation, pilot/RDS injection level).
 
 Sibling of routes_rbds.py -- same query/downsample shape against the
 ``audio_source_metrics`` table, different fields. Kept separate from
 routes_rbds.py because that module's ``_RBDS_EVENT_FIELDS`` and event-log
 concept are specific to discrete RDS field changes (PS, RadioText, lock
-state, ...), whereas these two metrics are continuous numeric series with
+state, ...), whereas these metrics are continuous numeric series with
 no analogous "event" to log.
 
 Deliberately does NOT include RF signal strength: the page's existing
@@ -68,8 +69,9 @@ def api_get_signal_quality_history(source_name: str):
     Derives a downsampled trend series from the ``audio_source_metrics``
     snapshots the audio service already persists once/sec (see
     ``eas_monitoring_service.py::_snapshot_audio_metrics_once``): stereo
-    pilot lock strength and discriminator click rate (multipath/
-    impulse-noise indicator).
+    pilot lock strength, discriminator click rate (multipath/
+    impulse-noise indicator), peak composite deviation (Hz), and 19 kHz
+    pilot / 57 kHz RDS injection level (Hz).
 
     Query:
         minutes (int, optional): History window in minutes. Default 60,
@@ -77,8 +79,9 @@ def api_get_signal_quality_history(source_name: str):
 
     Returns:
         200 with {source, minutes, sample_count, points}, where each point
-        is {t, stereo_pilot_strength, click_rate} (either field may be
-        null if that snapshot didn't carry it).
+        is {t, stereo_pilot_strength, click_rate, peak_deviation_hz,
+        pilot_injection_hz, rds_injection_hz} (any field may be null if
+        that snapshot didn't carry it).
     """
     try:
         minutes = int(request.args.get('minutes', 60))
@@ -105,17 +108,20 @@ def api_get_signal_quality_history(source_name: str):
         logger.error('Error querying signal-quality history for %s: %s', source_name, exc)
         return jsonify({'error': str(exc)}), 500
 
+    _FIELDS = (
+        'stereo_pilot_strength', 'click_rate',
+        'peak_deviation_hz', 'pilot_injection_hz', 'rds_injection_hz',
+    )
+
     points: List[Dict[str, Any]] = []
     for ts, md in rows:
         md = md or {}
-        if 'stereo_pilot_strength' not in md and 'click_rate' not in md:
+        if not any(f in md for f in _FIELDS):
             continue
 
-        points.append({
-            't': ts.isoformat() if ts is not None else None,
-            'stereo_pilot_strength': md.get('stereo_pilot_strength'),
-            'click_rate': md.get('click_rate'),
-        })
+        point = {'t': ts.isoformat() if ts is not None else None}
+        point.update({f: md.get(f) for f in _FIELDS})
+        points.append(point)
 
     sample_count = len(points)
     if sample_count > _SIGNAL_QUALITY_HISTORY_MAX_POINTS:

@@ -116,6 +116,32 @@ def test_history_returns_pilot_and_click_rate_points(history_app):
         assert data['points'][3]['click_rate'] == pytest.approx(0.03)
 
 
+def test_history_returns_deviation_and_injection_points(history_app):
+    with history_app.app_context():
+        base = utc_now() - timedelta(minutes=10)
+        _add_snapshot(base, {
+            'peak_deviation_hz': 58_000.0,
+            'pilot_injection_hz': 4_773.0,
+            'rds_injection_hz': 2_100.0,
+        })
+        db.session.commit()
+
+        client = history_app.test_client()
+        resp = client.get('/api/audio/sources/sdr-test/signal_quality/history')
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        assert data['sample_count'] == 1
+        point = data['points'][0]
+        assert point['peak_deviation_hz'] == pytest.approx(58_000.0)
+        assert point['pilot_injection_hz'] == pytest.approx(4_773.0)
+        assert point['rds_injection_hz'] == pytest.approx(2_100.0)
+        # A snapshot with only these fields still counts as a signal-quality
+        # sample even with no stereo_pilot_strength/click_rate present.
+        assert point['stereo_pilot_strength'] is None
+        assert point['click_rate'] is None
+
+
 def test_history_does_not_leak_rf_signal_strength(history_app):
     """RF signal strength is deliberately excluded (see routes_signal_quality.py
     module docstring) -- it's already charted from a different, hardware-level
