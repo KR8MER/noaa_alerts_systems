@@ -50,7 +50,7 @@ def register(app: Flask, route_logger) -> None:
 
         The endpoint reuses the existing ``capture_iq`` Redis command flow
         used by the "Capture IQ" button — same SDR-service path, same
-        on-disk ``.npy`` format — but instead of handing the file back to
+        on-disk ``.npz`` format — but instead of handing the file back to
         the browser it loads the complex64 samples here, runs a
         ``scipy.signal.spectrogram`` on them, and returns a compact JSON
         payload the diagnostics page renders to a ``<canvas>``.
@@ -177,8 +177,21 @@ def register(app: Flask, route_logger) -> None:
             # Load + immediately delete the file.  The waterfall view is
             # ephemeral; we never re-serve the raw IQ here.  This matches
             # the single-use semantics of the download endpoint.
+            #
+            # The SDR service writes .npz with 'iq' (complex64) and
+            # optionally 'multiplex' (see routes_diagnostics_analyze.py,
+            # which handles this the same way) -- np.load() on a .npz
+            # returns a lazy NpzFile container, not an array, so calling
+            # .size on it directly raised AttributeError on every capture.
+            # Fall back to a plain .npy of complex64 IQ for legacy captures.
+            samples = None
             try:
-                samples = np.load(capture_path, allow_pickle=False)
+                if capture_path.endswith(".npz"):
+                    with np.load(capture_path, allow_pickle=False) as archive:
+                        if "iq" in archive.files:
+                            samples = archive["iq"]
+                else:
+                    samples = np.load(capture_path, allow_pickle=False)
             finally:
                 try:
                     os.remove(capture_path)
@@ -188,7 +201,7 @@ def register(app: Flask, route_logger) -> None:
                         capture_path, cleanup_exc,
                     )
 
-            if samples.size == 0:
+            if samples is None or samples.size == 0:
                 return jsonify({"error": "Capture contained no samples"}), 500
 
             # SoapySDR / libairspy drivers in this repo deliver normalised

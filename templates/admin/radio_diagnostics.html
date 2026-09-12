@@ -1254,10 +1254,14 @@ sudo systemctl restart eas-station</code></pre>
                         animation: false,
                         interaction: { mode: 'index', intersect: false },
                         scales: {
-                            // suggestedMax (not a hard max) so a healthy, flat 100%-locked
-                            // pilot -- the common case -- doesn't render its line sitting
-                            // exactly on the top gridline, effectively invisible.
-                            y: { beginAtZero: true, suggestedMax: 100, ticks: { callback: v => v + '%' } },
+                            // max: 105, not 100 -- a percentage metric with genuinely zero
+                            // variance (e.g. a rock-solid 100% pilot lock the whole window)
+                            // gives Chart.js no data range to round up from, so suggestedMax
+                            // does nothing when the data already sits exactly on it. A fixed
+                            // ceiling above the true 0-100 range guarantees headroom
+                            // regardless of variance -- verified live: a receiver locked at
+                            // exactly 100% for 421/421 points still needs this to be visible.
+                            y: { beginAtZero: true, max: 105, ticks: { callback: v => v + '%' } },
                             ...commonScales,
                         },
                         plugins: {
