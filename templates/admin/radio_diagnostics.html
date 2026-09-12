@@ -474,6 +474,18 @@ sudo systemctl restart eas-station</code></pre>
                     <div style="position:relative;height:180px;">
                         <canvas id="clickRateHistoryChart" aria-label="Discriminator click rate over time" role="img"></canvas>
                     </div>
+                    <h4 class="text-muted mt-4 h6">Peak Deviation
+                        <span class="small fw-normal">(composite MPX, FCC full-scale reference &plusmn;75 kHz)</span>
+                    </h4>
+                    <div style="position:relative;height:180px;">
+                        <canvas id="peakDeviationHistoryChart" aria-label="Peak composite deviation over time" role="img"></canvas>
+                    </div>
+                    <h4 class="text-muted mt-4 h6">Pilot / RDS Injection Level
+                        <span class="small fw-normal">(healthy targets: ~6.75 kHz pilot, ~2-4.5 kHz RDS)</span>
+                    </h4>
+                    <div style="position:relative;height:180px;">
+                        <canvas id="injectionHistoryChart" aria-label="Pilot and RDS subcarrier injection level over time" role="img"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1186,6 +1198,8 @@ sudo systemctl restart eas-station</code></pre>
     let signalQualityHistorySource = null;
     let pilotStrengthHistoryChart = null;
     let clickRateHistoryChart = null;
+    let peakDeviationHistoryChart = null;
+    let injectionHistoryChart = null;
 
     async function loadSignalQualityHistory() {
         const statusEl = document.getElementById('signalQualityHistoryStatus');
@@ -1222,6 +1236,9 @@ sudo systemctl restart eas-station</code></pre>
                 return d ? d.toLocaleTimeString() : '—';
             });
             const pct = v => (v === null || v === undefined) ? null : Number(v) * 100;
+            // Stored in Hz (matches this codebase's convention elsewhere,
+            // e.g. rf_signal_strength); kHz is display-only formatting.
+            const khz = v => (v === null || v === undefined) ? null : Number(v) / 1000;
             const tooltipTitle = items => fullLabels[items[0]?.dataIndex] ?? '';
             const commonScales = {
                 x: { ticks: { maxTicksLimit: 8, autoSkip: true, maxRotation: 0, minRotation: 0 } },
@@ -1300,6 +1317,101 @@ sudo systemctl restart eas-station</code></pre>
                         interaction: { mode: 'index', intersect: false },
                         scales: {
                             y: { beginAtZero: true, ticks: { callback: v => v + '%' } },
+                            ...commonScales,
+                        },
+                        plugins: {
+                            legend: { labels: { boxWidth: 18 } },
+                            tooltip: { callbacks: { title: tooltipTitle } },
+                        },
+                    },
+                });
+            }
+
+            if (peakDeviationHistoryChart) {
+                peakDeviationHistoryChart.destroy();
+                peakDeviationHistoryChart = null;
+            }
+            const devCanvas = document.getElementById('peakDeviationHistoryChart');
+            if (devCanvas && window.Chart) {
+                peakDeviationHistoryChart = new Chart(devCanvas.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Peak Deviation',
+                            data: points.map(p => khz(p.peak_deviation_hz)),
+                            borderColor: '#39a0ff',
+                            backgroundColor: 'rgba(57,160,255,.15)',
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            tension: .25,
+                            spanGaps: true,
+                        }],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            // No suggestedMax/max here on purpose -- unlike the
+                            // percentage charts above, real audio content makes
+                            // this genuinely vary rather than sit at a constant
+                            // boundary, so Chart.js's own auto-scale padding is
+                            // safe (see radio_diagnostics_trends.js's Lock %/
+                            // pilot-strength postmortem for why a hard ceiling
+                            // is only needed when data can plausibly equal it).
+                            y: { beginAtZero: true, ticks: { callback: v => v + ' kHz' } },
+                            ...commonScales,
+                        },
+                        plugins: {
+                            legend: { labels: { boxWidth: 18 } },
+                            tooltip: { callbacks: { title: tooltipTitle } },
+                        },
+                    },
+                });
+            }
+
+            if (injectionHistoryChart) {
+                injectionHistoryChart.destroy();
+                injectionHistoryChart = null;
+            }
+            const injCanvas = document.getElementById('injectionHistoryChart');
+            if (injCanvas && window.Chart) {
+                injectionHistoryChart = new Chart(injCanvas.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [
+                            {
+                                label: 'Pilot (19 kHz)',
+                                data: points.map(p => khz(p.pilot_injection_hz)),
+                                borderColor: '#39a0ff',
+                                backgroundColor: 'rgba(57,160,255,.15)',
+                                pointRadius: 0,
+                                borderWidth: 1.5,
+                                tension: .25,
+                                spanGaps: true,
+                            },
+                            {
+                                label: 'RDS (57 kHz)',
+                                data: points.map(p => khz(p.rds_injection_hz)),
+                                borderColor: '#9b59b6',
+                                backgroundColor: 'rgba(155,89,182,.15)',
+                                pointRadius: 0,
+                                borderWidth: 1.5,
+                                tension: .25,
+                                spanGaps: true,
+                            },
+                        ],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            y: { beginAtZero: true, ticks: { callback: v => v + ' kHz' } },
                             ...commonScales,
                         },
                         plugins: {

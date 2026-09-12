@@ -179,6 +179,18 @@ class FMDemodulator:
         self._rbds_worker: Optional[RBDSWorker] = None
         self._rbds_intermediate_rate = self._intermediate_rate
 
+        # RDS subcarrier injection-level measurement -- distinct from (and
+        # much cheaper than) RBDSWorker's own 54-60 kHz decode-chain filter:
+        # this just measures how much of the composite deviation budget the
+        # 57 kHz subcarrier occupies, mirroring exactly how self._pilot_filter
+        # measures the 19 kHz pilot's injection level below. Only built when
+        # RBDS is actually relevant, same gate as rbds_enabled, so receivers
+        # that don't use RDS pay nothing extra.
+        self._rds_injection_filter: Optional[np.ndarray] = (
+            self._design_fir_bandpass(55600.0, 58400.0, config.sample_rate, taps=audio_filter_taps)
+            if self._rbds_enabled else None
+        )
+
         # Early-decimation state (PySDR architecture).  The RBDSWorker's
         # filter chain (54-60 kHz bandpass, 57 kHz mix, 2.4 kHz post-mix
         # lowpass, downstream decim to 25 kHz, then resample to 19 kHz) is
@@ -442,6 +454,25 @@ class FMDemodulator:
         pilot_filtered: Optional[np.ndarray] = None
         pilot_rms: Optional[float] = None
 
+        # Hz-per-radian-per-sample: the inverse of _audio_gain (which maps
+        # raw discriminator output to normalized audio where the reference
+        # deviation_hz = amplitude 1.0). multiplex and any band-limited
+        # slice of it are still in raw radians/sample; multiplying by this
+        # factor converts straight to real Hz, no separate calibration
+        # needed -- FM demodulation of a digital SDR is trustworthy on
+        # frequency even without amplitude calibration.
+        hz_per_radian_sample = self.config.sample_rate / (2.0 * np.pi)
+
+        # Peak instantaneous deviation of the whole composite MPX signal
+        # this chunk (FCC full-scale reference: +/-75 kHz). Free -- multiplex
+        # is already computed above regardless of stereo/RBDS being enabled.
+        peak_deviation_hz = (
+            float(np.max(np.abs(multiplex))) * hz_per_radian_sample
+            if multiplex.size else 0.0
+        )
+        pilot_injection_hz = 0.0
+        rds_injection_hz = 0.0
+
         # Stereo pilot detection (19 kHz tone indicates stereo broadcast)
         if self._stereo_enabled and self.config.sample_rate >= 38000:
             # Filter for 19 kHz pilot tone
@@ -450,12 +481,25 @@ class FMDemodulator:
             # Measure pilot strength (RMS of filtered signal)
             pilot_rms = float(np.sqrt(np.mean(pilot_filtered ** 2)))
             stereo_pilot_strength = min(1.0, pilot_rms * 10.0)  # Scale to 0-1 range
+            # Calibrated Hz reading (typical healthy target: ~6.75 kHz, 9%
+            # of 75 kHz full-scale) -- reuses pilot_rms, no extra filtering.
+            pilot_injection_hz = pilot_rms * hz_per_radian_sample
 
             # Pilot is considered "locked" if strength exceeds threshold
             stereo_pilot_locked = stereo_pilot_strength > 0.1  # 10% threshold
 
             if stereo_pilot_locked:
                 logger.debug("Stereo pilot detected: strength=%.2f", stereo_pilot_strength)
+
+        # RDS subcarrier injection level (typical healthy range ~2-4.5 kHz).
+        # Same technique as the pilot measurement above, gated the same way
+        # RBDS decoding itself is gated -- see self._rds_injection_filter's
+        # construction in __init__ for why this costs nothing on receivers
+        # that don't use RDS.
+        if self._rds_injection_filter is not None:
+            rds_filtered = oaconvolve(multiplex, self._rds_injection_filter, mode="same")
+            rds_rms = float(np.sqrt(np.mean(rds_filtered ** 2)))
+            rds_injection_hz = rds_rms * hz_per_radian_sample
 
         # RBDS extraction in a separate worker thread.  Submit samples
         # (non-blocking) and pick up whatever the worker has decoded since
@@ -650,6 +694,9 @@ class FMDemodulator:
                 bool(self.config.enable_click_suppression)
                 and self.config.click_suppression_threshold > 0.0
             ),
+            peak_deviation_hz=peak_deviation_hz,
+            pilot_injection_hz=pilot_injection_hz,
+            rds_injection_hz=rds_injection_hz,
         )
 
         return audio.astype(np.float32), status

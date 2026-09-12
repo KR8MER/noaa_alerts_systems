@@ -278,6 +278,25 @@ class DemodulatorStatus:
     # demodulator.  Lets the UI distinguish "0% clicks because suppressor
     # is off" from "0% clicks because the signal is clean".
     click_suppression_enabled: bool = False
+    # Peak instantaneous deviation of the whole composite MPX signal this
+    # chunk, in Hz -- the FCC full-scale reference is +/-75 kHz. Derived
+    # from the same raw discriminator output (radians/sample) already
+    # computed for every chunk regardless; not a new DSP stage, just the
+    # inverse of the audio_gain scale factor already used to normalize
+    # audio (see WFMDemodulator._audio_gain).
+    peak_deviation_hz: float = 0.0
+    # RMS injection level of the 19 kHz stereo pilot, in Hz. A healthy FM
+    # stereo broadcast targets ~6.75 kHz (9% of 75 kHz full-scale). Reuses
+    # the same pilot_rms value already computed for stereo_pilot_strength
+    # (which stays an arbitrary 0-1 UI/lock-threshold scale) -- this is
+    # the calibrated Hz reading a broadcast engineer actually wants.
+    pilot_injection_hz: float = 0.0
+    # RMS injection level of the 57 kHz RDS subcarrier, in Hz (typical
+    # healthy range ~2-4.5 kHz). Only populated when RBDS decoding is
+    # enabled and the sample rate preserves the subcarrier (same gate as
+    # rbds_enabled) -- unlike pilot injection, this needs a small new
+    # bandpass filter (mirrors the existing pilot filter exactly).
+    rds_injection_hz: float = 0.0
 
 
 # ── JSON round-trip for cross-process status sharing ────────────────────────

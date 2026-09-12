@@ -456,6 +456,18 @@ class RedisSDRSourceAdapter(AudioSourceAdapter):
                     getattr(status, 'click_suppression_enabled', False)
                 )
 
+            # FM broadcast-analyzer metrics (Hz): peak composite deviation,
+            # 19 kHz pilot injection, 57 kHz RDS injection. Same
+            # threading pattern as click_rate above -- the once/sec
+            # metadata snapshot backfills the signal-quality history
+            # endpoint automatically.
+            if getattr(status, 'peak_deviation_hz', None) is not None:
+                self.metrics.metadata['peak_deviation_hz'] = float(status.peak_deviation_hz)
+            if getattr(status, 'pilot_injection_hz', None) is not None:
+                self.metrics.metadata['pilot_injection_hz'] = float(status.pilot_injection_hz)
+            if getattr(status, 'rds_injection_hz', None) is not None:
+                self.metrics.metadata['rds_injection_hz'] = float(status.rds_injection_hz)
+
             # Extract RBDS/RDS data if available.  We cache the last decoded
             # object so that between decoder poll cycles we can keep showing
             # the most recent values (RBDS groups arrive every ~100 ms, so a
