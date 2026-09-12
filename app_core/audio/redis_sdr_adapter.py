@@ -444,6 +444,18 @@ class RedisSDRSourceAdapter(AudioSourceAdapter):
                 self.metrics.metadata['rf_signal_strength'] = float(status.signal_strength)
                 self.metrics.metadata['rf_signal_strength_updated'] = time.time()
 
+            # Multipath/impulse-noise indicator -- fraction of discriminator
+            # samples the click suppressor replaced this chunk (see
+            # DemodulatorStatus.click_rate). Not persisted anywhere before
+            # this: _snapshot_audio_metrics_once() dumps the whole metadata
+            # dict once/sec, so adding it here is enough to backfill the
+            # signal-quality history endpoint with no other plumbing.
+            if getattr(status, 'click_rate', None) is not None:
+                self.metrics.metadata['click_rate'] = float(status.click_rate)
+                self.metrics.metadata['click_suppression_enabled'] = bool(
+                    getattr(status, 'click_suppression_enabled', False)
+                )
+
             # Extract RBDS/RDS data if available.  We cache the last decoded
             # object so that between decoder poll cycles we can keep showing
             # the most recent values (RBDS groups arrive every ~100 ms, so a

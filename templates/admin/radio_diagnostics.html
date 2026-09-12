@@ -438,6 +438,48 @@ sudo systemctl restart eas-station</code></pre>
     </div>
 </div>
 
+<!-- Signal Quality History modal — stereo pilot strength + discriminator
+     click rate over time, from the same audio_source_metrics snapshots as
+     RBDS History above. Deliberately NOT RF signal strength -- that's
+     already charted in the per-receiver "Historical Trends" panel
+     (radio_diagnostics_trends.js) from a different, hardware-level source;
+     duplicating it here from the demodulator's own RSSI estimate would
+     just invite "why don't these two agree" confusion. -->
+<div class="modal fade" id="signalQualityHistoryModal" tabindex="-1" aria-labelledby="signalQualityHistoryModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title h5" id="signalQualityHistoryModalLabel">
+                    <i class="fas fa-chart-line me-2" aria-hidden="true"></i>Signal Quality History
+                </h3>
+                <select id="signalQualityHistoryRange" class="form-select form-select-sm w-auto ms-3" aria-label="History time range">
+                    <option value="60" selected>Last hour</option>
+                    <option value="360">Last 6 hours</option>
+                    <option value="1440">Last 24 hours</option>
+                </select>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="signalQualityHistoryStatus" class="text-center text-muted py-3">
+                    <i class="fas fa-spinner fa-spin me-2" aria-hidden="true"></i>Loading history…
+                </div>
+                <div id="signalQualityHistoryContent" style="display:none;">
+                    <h4 class="text-muted h6">Stereo Pilot Strength</h4>
+                    <div style="position:relative;height:180px;">
+                        <canvas id="pilotStrengthHistoryChart" aria-label="Stereo pilot strength over time" role="img"></canvas>
+                    </div>
+                    <h4 class="text-muted mt-4 h6">Discriminator Click Rate
+                        <span class="small fw-normal">(multipath / impulse-noise indicator)</span>
+                    </h4>
+                    <div style="position:relative;height:180px;">
+                        <canvas id="clickRateHistoryChart" aria-label="Discriminator click rate over time" role="img"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="{{ url_for('static', filename='vendor/chartjs/chart-v3.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/radio_diagnostics_trends.js') }}"></script>
 <script>
@@ -953,6 +995,12 @@ sudo systemctl restart eas-station</code></pre>
                                     data-rbds-history-label="${escape(displayName)}">
                                 <i class="fas fa-clock-rotate-left me-1" aria-hidden="true"></i>History
                             </button>
+                            <button type="button" class="btn btn-sm btn-outline-primary"
+                                    data-signalq-history-source="${escape(s.name)}"
+                                    data-signalq-history-label="${escape(displayName)}"
+                                    title="Stereo pilot strength and discriminator click rate (multipath indicator) over time">
+                                <i class="fas fa-chart-line me-1" aria-hidden="true"></i>Signal Quality
+                            </button>
                         </header>
                         ${stationCard}
                         ${healthCard}
@@ -1129,6 +1177,164 @@ sudo systemctl restart eas-station</code></pre>
     const rbdsHistoryRangeEl = document.getElementById('rbdsHistoryRange');
     if (rbdsHistoryRangeEl) {
         rbdsHistoryRangeEl.addEventListener('change', loadRbdsHistory);
+    }
+
+    // ---- Signal Quality history modal --------------------------------
+    // Stereo pilot strength + discriminator click rate, served by
+    // /api/audio/sources/<name>/signal_quality/history. Mirrors the RBDS
+    // history modal above (same endpoint shape, same DB-backed source).
+    let signalQualityHistorySource = null;
+    let pilotStrengthHistoryChart = null;
+    let clickRateHistoryChart = null;
+
+    async function loadSignalQualityHistory() {
+        const statusEl = document.getElementById('signalQualityHistoryStatus');
+        const contentEl = document.getElementById('signalQualityHistoryContent');
+        const rangeEl = document.getElementById('signalQualityHistoryRange');
+        if (!signalQualityHistorySource || !statusEl || !contentEl) return;
+
+        statusEl.style.display = '';
+        statusEl.innerHTML = '<i class="fas fa-spinner fa-spin me-2" aria-hidden="true"></i>Loading history…';
+        contentEl.style.display = 'none';
+
+        try {
+            const minutes = rangeEl ? rangeEl.value : 60;
+            const resp = await fetch(
+                `/api/audio/sources/${encodeURIComponent(signalQualityHistorySource)}/signal_quality/history?minutes=${minutes}`,
+                { cache: 'no-store' }
+            );
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+            const data = await resp.json();
+            const points = Array.isArray(data.points) ? data.points : [];
+
+            if (!points.length) {
+                statusEl.innerHTML = '<i class="fas fa-circle-info me-2" aria-hidden="true"></i>'
+                    + 'No stored signal-quality snapshots in this window yet.';
+                return;
+            }
+
+            const labels = points.map(p => {
+                const d = p.t ? new Date(p.t) : null;
+                return d ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—';
+            });
+            const fullLabels = points.map(p => {
+                const d = p.t ? new Date(p.t) : null;
+                return d ? d.toLocaleTimeString() : '—';
+            });
+            const pct = v => (v === null || v === undefined) ? null : Number(v) * 100;
+            const tooltipTitle = items => fullLabels[items[0]?.dataIndex] ?? '';
+            const commonScales = {
+                x: { ticks: { maxTicksLimit: 8, autoSkip: true, maxRotation: 0, minRotation: 0 } },
+            };
+
+            if (pilotStrengthHistoryChart) {
+                pilotStrengthHistoryChart.destroy();
+                pilotStrengthHistoryChart = null;
+            }
+            const pilotCanvas = document.getElementById('pilotStrengthHistoryChart');
+            if (pilotCanvas && window.Chart) {
+                pilotStrengthHistoryChart = new Chart(pilotCanvas.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Stereo Pilot Strength',
+                            data: points.map(p => pct(p.stereo_pilot_strength)),
+                            borderColor: '#39a0ff',
+                            backgroundColor: 'rgba(57,160,255,.15)',
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            tension: .25,
+                            spanGaps: true,
+                        }],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            // suggestedMax (not a hard max) so a healthy, flat 100%-locked
+                            // pilot -- the common case -- doesn't render its line sitting
+                            // exactly on the top gridline, effectively invisible.
+                            y: { beginAtZero: true, suggestedMax: 100, ticks: { callback: v => v + '%' } },
+                            ...commonScales,
+                        },
+                        plugins: {
+                            legend: { labels: { boxWidth: 18 } },
+                            tooltip: { callbacks: { title: tooltipTitle } },
+                        },
+                    },
+                });
+            }
+
+            if (clickRateHistoryChart) {
+                clickRateHistoryChart.destroy();
+                clickRateHistoryChart = null;
+            }
+            const clickCanvas = document.getElementById('clickRateHistoryChart');
+            if (clickCanvas && window.Chart) {
+                clickRateHistoryChart = new Chart(clickCanvas.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Click Rate',
+                            data: points.map(p => pct(p.click_rate)),
+                            borderColor: '#d9534f',
+                            backgroundColor: 'rgba(217,83,79,.15)',
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            tension: .25,
+                            spanGaps: true,
+                        }],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            y: { beginAtZero: true, ticks: { callback: v => v + '%' } },
+                            ...commonScales,
+                        },
+                        plugins: {
+                            legend: { labels: { boxWidth: 18 } },
+                            tooltip: { callbacks: { title: tooltipTitle } },
+                        },
+                    },
+                });
+            }
+
+            statusEl.style.display = 'none';
+            contentEl.style.display = '';
+        } catch (error) {
+            console.error('Failed to load signal-quality history:', error);
+            statusEl.innerHTML = `<i class="fas fa-exclamation-triangle me-2" aria-hidden="true"></i>`
+                + `Couldn't load history: ${escapeHistText(error.message)}`;
+        }
+    }
+
+    document.addEventListener('click', (ev) => {
+        const btn = ev.target.closest('[data-signalq-history-source]');
+        if (!btn) return;
+        signalQualityHistorySource = btn.getAttribute('data-signalq-history-source');
+        const label = btn.getAttribute('data-signalq-history-label') || signalQualityHistorySource;
+        const titleEl = document.getElementById('signalQualityHistoryModalLabel');
+        if (titleEl) {
+            titleEl.innerHTML = '<i class="fas fa-chart-line me-2" aria-hidden="true"></i>'
+                + `Signal Quality History — ${escapeHistText(label)}`;
+        }
+        const modalEl = document.getElementById('signalQualityHistoryModal');
+        if (modalEl && window.bootstrap) {
+            bootstrap.Modal.getOrCreateInstance(modalEl).show();
+        }
+        loadSignalQualityHistory();
+    });
+
+    const signalQualityHistoryRangeEl = document.getElementById('signalQualityHistoryRange');
+    if (signalQualityHistoryRangeEl) {
+        signalQualityHistoryRangeEl.addEventListener('change', loadSignalQualityHistory);
     }
 
     async function loadDiagnostics() {

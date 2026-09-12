@@ -62,6 +62,7 @@ from . import (  # noqa: F401  - imported for their side effect of registering r
     routes_icecast,
     routes_metrics,
     routes_rbds,
+    routes_signal_quality,
     routes_source_control,
     routes_sources,
     routes_sources_delete,
@@ -121,6 +122,10 @@ from .routes_rbds import (
     _RBDS_HISTORY_MAX_POINTS,
     api_get_rbds_history,
 )
+from .routes_signal_quality import (
+    _SIGNAL_QUALITY_HISTORY_MAX_POINTS,
+    api_get_signal_quality_history,
+)
 from .routes_source_control import (
     api_start_audio_source,
     api_stop_audio_source,
@@ -179,6 +184,7 @@ _LOGGING_MODULES = (
     routes_sources_write,
     routes_source_control,
     routes_rbds,
+    routes_signal_quality,
     routes_metrics,
     routes_health,
     listing,
