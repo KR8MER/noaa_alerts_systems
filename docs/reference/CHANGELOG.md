@@ -7,6 +7,15 @@ All notable changes to this project are documented in this file. The format is b
 
 - Nothing yet. Document changes here as they land; the next release cut moves them into a version heading.
 
+## [3.3.1] - 2026-09-12 - SDR Diagnostics: fix Snapshot Waterfall crash and two invisible-line chart bugs
+
+Found by systematically clicking through every control on the SDR Diagnostics page (logged in as a real admin) rather than trusting that "no console error" meant "actually works" -- three real, independent bugs surfaced this way.
+
+- **Fixed**: "Snapshot Waterfall" returned a 500 on every click -- `AttributeError: 'NpzFile' object has no attribute 'size'`. `routes_diagnostics_waterfall.py` called `np.load(path).size` directly, but `sdr_hardware_service.py` actually writes captures as `.npz` (key `'iq'`); `np.load()` on a `.npz` returns a lazy `NpzFile` container, not an array. `routes_diagnostics_analyze.py` already handled this correctly (checks the extension, opens the archive, extracts `archive["iq"]`) -- `routes_diagnostics_waterfall.py` had just never been exercised with this in mind. Fixed identically; also corrected the route's docstring, which still said `.npy`.
+- **Fixed**: the "Lock %" chart in the per-receiver Historical Trends panel (`static/js/radio_diagnostics_trends.js`) rendered its line invisible for a receiver locked 100% of the window -- the common, healthy case. Same root cause as the Signal Quality pilot-strength chart fixed in 3.3.0, but worse: with the pilot chart, `suggestedMax` happened to work because that data had slight variance (99-100%); here the data is a literal constant 100.0 with zero variance, so `suggestedMax: 100` computes `max(100, 100) = 100` -- no headroom at all, confirmed live via the actual Chart.js instance. Re-fixed both charts (Lock % and pilot strength) with a hard `max: 105`, which holds regardless of data variance.
+- **Fixed**: the "Sample Rate Ratio" chart auto-scaled to a nonsensical **-1 to 1.5** range for a constant, real 0.25 ratio -- Chart.js has no sensible default for a zero-variance series with no configured bounds. `sample_rate_ratio` (effective/configured) is always in [0, 1] by construction; added `{ min: 0, suggestedMax: 1 }`.
+- `tests/test_spectrum_frequency_axis.py`: two new regression tests -- one reproducing the exact `.npz`/`NpzFile.size` bug and confirming the fixed extraction works, one guarding the source against a revert to the bare `np.load(path).size` pattern.
+
 ## [3.3.0] - 2026-09-12 - SDR Diagnostics: Signal Quality history (stereo pilot + click rate)
 
 - **Added**: a "Signal Quality" history modal on the SDR Diagnostics page (`/admin/radio/diagnostics`), next to the existing RBDS History button, charting stereo pilot lock strength and discriminator click rate (a multipath/impulse-noise indicator) over the last hour/6h/24h. First step toward FM-broadcast-analyzer-style monitoring (PIRA P275-style) built on the existing SDR receiver stack rather than dedicated hardware.

@@ -325,10 +325,21 @@
                 ]);
                 trendsRenderChart(receiverId, 'locked', labels, [
                     { label: 'Lock %', data: samples.map(trendsLockedPct), color: '#39ff8f' },
-                ], { min: 0, max: 100 });
+                    // max: 105, not 100/suggestedMax: a receiver locked 100% of the
+                    // window (zero variance -- the common, healthy case) gives Chart.js
+                    // no data range to round up from, so suggestedMax does nothing when
+                    // data already sits exactly on it -- confirmed live (yMax stayed 100
+                    // after switching to suggestedMax). A fixed ceiling above the true
+                    // 0-100 range is the only fix that holds regardless of variance.
+                ], { min: 0, max: 105 });
                 trendsRenderChart(receiverId, 'rate', labels, [
                     { label: 'Sample Rate Ratio', data: samples.map(function (s) { return num(s.sample_rate_ratio); }), color: '#f0ad4e' },
-                ]);
+                    // effective/configured is always in [0, 1] by construction (decimation
+                    // never produces more samples than were captured) -- without this,
+                    // Chart.js auto-scaling a constant series (the common case: a fixed
+                    // decimation factor never changes) picks an arbitrary, physically
+                    // meaningless range, observed live as -1 to 1.5 for a flat 0.25.
+                ], { min: 0, suggestedMax: 1 });
                 trendsRenderChart(receiverId, 'buffer', labels, [
                     { label: 'Overflow', data: samples.map(function (s) { return num(s.overflow_count); }), color: '#d9534f' },
                     { label: 'Underflow', data: samples.map(function (s) { return num(s.underflow_count); }), color: '#9b59b6' },

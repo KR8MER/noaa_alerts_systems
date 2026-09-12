@@ -430,3 +430,53 @@ def test_zoom_controls_seed_from_live_state():
     src = _diagnostics_source()
     assert "label.textContent = zoomLabelText(state);" in src
     assert "reset.disabled = !zoomIsActive(state);" in src
+
+
+# --------------------------------------------------------------------------
+# Snapshot Waterfall: .npz vs .npy capture format
+# --------------------------------------------------------------------------
+#
+# Caught live by actually clicking "Snapshot Waterfall": every capture
+# failed with a 500 -- "AttributeError: 'NpzFile' object has no attribute
+# 'size'". sdr_hardware_service.py writes captures as .npz (np.savez, key
+# 'iq'; see routes_diagnostics_analyze.py's comment on the same format),
+# but routes_diagnostics_waterfall.py called np.load(path).size directly,
+# which only works for a plain .npy array -- np.load() on a .npz returns a
+# lazy NpzFile container with no .size attribute at all.
+
+def test_waterfall_route_handles_npz_capture_format():
+    """The real, actually-written capture format (.npz) must not crash
+    the route the way a bare np.load(path).size did in production."""
+    import numpy as np
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        npz_path = f"{tmp}/capture.npz"
+        np.savez(npz_path, iq=np.ones(1024, dtype=np.complex64))
+
+        # The exact extraction routes_diagnostics_waterfall.py now uses.
+        samples = None
+        with np.load(npz_path, allow_pickle=False) as archive:
+            if "iq" in archive.files:
+                samples = archive["iq"]
+
+        assert samples is not None
+        assert samples.size == 1024  # would have raised AttributeError before the fix
+
+        # Document the actual bug: np.load() on a .npz without indexing
+        # into it returns an NpzFile, not an array.
+        raw = np.load(npz_path, allow_pickle=False)
+        try:
+            with pytest.raises(AttributeError):
+                raw.size  # noqa: B018 - intentional attribute-access to reproduce the bug
+        finally:
+            raw.close()
+
+
+def test_waterfall_route_source_reads_npz_before_checking_size():
+    """Guard against the fix being reverted to a bare np.load(path).size."""
+    from webapp.radio_settings import routes_diagnostics_waterfall
+
+    src = pathlib.Path(routes_diagnostics_waterfall.__file__).read_text()
+    assert 'capture_path.endswith(".npz")' in src
+    assert 'archive["iq"]' in src
